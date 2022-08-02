@@ -11,114 +11,136 @@ npx ironlauncher <project name> --auth --json
 npm i jsonwebtoken express-jwt
 ```
 
+
+## Steps
+
+## 0. Initial cleanup
+
+- Uninstall dependencies
+
 ```javascript
 npm uninstall express-session connect-mongo
 ```
 
-- necessary for this code, but deppends on your code in auth.routes:
+
+- Cleanup `config/index.js` (don't delete the whole file, just the code related to sessions):
 
 ```javascript
-npm install bcryptjs
-npm uninstall bcrypt
-```
-
-## Steps
-
-## 0. Delete all code for session, for example in config/index.js
-
-- DELETE:
-
-```javascript
-// ℹ️ Session middleware for authentication
-// https://www.npmjs.com/package/express-session
 const session = require("express-session");
-
-// ℹ️ MongoStore in order to save the user session in the database
-// https://www.npmjs.com/package/connect-mongo
-const MongoStore = require("connect-mongo");
-
-// ℹ️ Middleware that adds a "req.session" information and later to check that you are who you say you are 😅
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET || "super hyper secret key",
-    resave: false,
-    saveUninitialized: false,
-    store: MongoStore.create({
-      mongoUrl: MONGO_URI,
-    }),
-    cookie: {
-      maxAge: 1000 * 60 * 60 * 24 * 365,
-      sameSite: "none",
-      secure: process.env.NODE_ENV === "production",
-    },
-  })
-);
-
-app.use((req, res, next) => {
-  req.user = req.session.user || null;
-  next();
-});
 ```
-
-## 1. Modify auth routes
-
-## in auth.routes.js
-
-### POST /signup
-
-- "can" be modified (we don't need to store info in session + can automatically log in the user)
-
-### POST /login
-
-- we do not store info in session
-- we generate & sign a token + we send it in the response
-
-- `const jwt = require("jsonwebtoken")`
-
-- generate token after you check that password is correct.
-
-  In router.post("/login" add below:
 
 ```javascript
-  // Compare the provided password with the one saved in the database
-      const passwordCorrect = bcrypt.compareSync(password, foundUser.password);
-
-      if (passwordCorrect) { // login was successful
-
-        // Deconstruct the user object to omit the password
-        const { _id, email } = foundUser;
-
-        // Create an object that will be set as the token payload
-        const payload = { _id, email };
-
-  const authToken = jwt.sign(payload, process.env.TOKEN_SECRET, {
-    algorithm: "HS256",
-    expiresIn: "6h",
-  });
-
-  return res.json({ authToken: authToken });
-});
+const MongoStore = require("connect-mongo");
 ```
 
-### in .env file
+```javascript
+  app.use(
+    session({
+      secret: process.env.SESSION_SECRET || "super hyper secret key",
+      resave: false,
+      saveUninitialized: false,
+      store: MongoStore.create({
+        mongoUrl: MONGO_URI,
+      }),
+      cookie: {
+        maxAge: 1000 * 60 * 60 * 24 * 365,
+        sameSite: "none",
+        secure: process.env.NODE_ENV === "production",
+      },
+    })
+  );
 
-- `TOKEN_SECRET=<yoursecret>`
+  app.use((req, res, next) => {
+    req.user = req.session.user || null;
+    next();
+  });
+```
 
-### example of current .env file
+
+
+
+## 1. Environment Variables
+
+- Add secret to .env file (we will use it to sign tokens)
+
+```javascript
+TOKEN_SECRET=<yoursecret>`
+```
+
+Example .env file:
 
 ```javascript
 PORT = 5005;
-TOKEN_SECRET = "keyboard cat";
+TOKEN_SECRET=1r0Nh4cK
 ORIGIN = "http://localhost:3000";
 ```
 
-## 2. Create middleware
+
+## 2. Modify auth routes
+
+## in auth.routes.js
+
+### Require jsonwebtoken package
+
+```javascript
+const jwt = require("jsonwebtoken");
+```
+
+
+### POST /signup
+
+- remove:
+```javascript
+req.session.user = user;
+```
+
+- optional: you can also add code to automatically log in the user (generate a token + send it in the response, just as we will do in the route to login)
+
+
+### POST /login
+
+- remove:
+```javascript
+req.session.user = user;
+```
+
+- We generate & sign a token + we send it in the response
+
+- For that, we will use the following code:
+
+```javascript
+
+//
+//At this point, we have checked that credentials are correct...
+//
+
+const { _id, email, name } = user;
+
+// Create an object that will be set as the token payload
+const payload = { _id, email, name };
+
+// Create and sign the token
+const authToken = jwt.sign(
+  payload,
+  process.env.TOKEN_SECRET,
+  { algorithm: 'HS256', expiresIn: "6h" }
+);
+
+// Send the token as the response
+res.status(200).json({ authToken: authToken });
+```
+
+
+
+
+## 3. Create middleware
 
 - in middleware folder create jwt.middleware.js file and delete isLoggedIn + isLoggedOut
 
 - delete middleware from auth.routes.js, for example here delete isLoggedOut:
 
 `router.post("/login", isLoggedOut, (req, res, next) => {`
+
 
 ### in jwt.middleware.js
 
@@ -154,21 +176,31 @@ module.exports = {
 };
 ```
 
-## 3. Require this middleware and include it in routes
+## 4. Now you just need to require + use that middleware to protect routes
 
-### in auth.routes.js
+Ex:
 
 ```javascript
 const { isAuthenticated } = require("./middleware/jwt.middleware");
 ```
 
-### in index.routes.js
-
 ```javascript
-const { isAuthenticated } = require("../middleware/jwt.middleware");
+router.post("/create", isAuthenticated, (req, res, next) => {
+  //...
+});
 ```
 
-## 4. Create new route in auth.routes
+
+Or, you can protect all the routes from a file, when you mount it in app.js. Ex:
+
+```javascript
+router.use("/projects", projectRoutes);
+router.use("/tasks", isAuthenticated, taskRoutes); //all routes from this file will be protected
+```
+
+
+
+## 5. Create a new route to verify tokens (in auth.routes)
 
 ### GET /verify
 
@@ -182,25 +214,41 @@ router.get("/verify", isAuthenticated, (req, res, next) => {
 
 - Remove route /logout if you have it
 
-## 5. Create 401 error in error-handling/index.js
 
-### add code to send a 401
+## 6. Cleanup
 
-```javascript
-if (err.name === "UnauthorizedError") {
-  res.status(401).json({ message: "invalid token..." });
-}
-```
+Search "sessions" and make sure there's no remaining code for sessions.
 
-## 6. Optional
 
-### in app.js
+## 7. (Optional) Improve error handling (if a token is not valid, we will send a 401 error)
 
-- if you want to protect all your routes, you can do it this way:
+
+### Replace error-handling/index.js with:
 
 ```javascript
-router.use("/projects", isAuthenticated, projectRoutes);
-router.use("/tasks", isAuthenticated, taskRoutes);
+module.exports = (app) => {
+    app.use((req, res, next) => {
+      // this middleware runs whenever requested page is not available
+      res.status(404).json({ errorMessage: "This route does not exist" });
+    });
+  
+    app.use((err, req, res, next) => {
+      // whenever you call next(err), this middleware will handle the error
+      // always logs the error
+      console.error("ERROR", req.method, req.path, err);
+  
+      // if a token is not valid, send a 401 error
+      if (err.name === "UnauthorizedError") {
+        res.status(401).json({ message: "invalid token..." });
+      }
+
+      // only render if the error ocurred before sending the response
+      if (!res.headersSent) {
+        res.status(500).json({
+          errorMessage: "Internal server error. Check the server console",
+        });
+      }
+    });
+  };
 ```
 
-in this example our routes are called /projects and /tasks (we have projects.routes.js & tasks.routes.js). In your case you would be using the names of YOUR routes
